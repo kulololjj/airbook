@@ -2,6 +2,7 @@
 import os
 from datetime import datetime
 
+from pathlib import Path
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, AIMessage
@@ -10,7 +11,7 @@ from langchain_openai import ChatOpenAI
 
 from tools.flight_tools import search_flights, get_cheapest_period, get_airport_info
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")
 
 def _build_system_prompt() -> str:
     today = datetime.now().strftime("%Y年%m月%d日")
