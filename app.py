@@ -10,8 +10,8 @@ st.title("🛫 AI 机票助手")
 with st.sidebar:
     st.header("🛫 机票助手")
     ds = "🟢 DeepSeek" if os.getenv("DEEPSEEK_API_KEY") else "⚪ DeepSeek"
-    av = "🟢 AviationStack" if os.getenv("AVIATIONSTACK_API_KEY") else "⚪ AviationStack(模拟)"
-    st.caption(f"{ds}　{av}")
+    fl = "🟢 Google Flights" if os.getenv("SERPAPI_API_KEY") else "⚪ Google Flights(模拟)"
+    st.caption(f"{ds}　{fl}")
 
     st.markdown("---")
     st.markdown("**💡 快速示例（点击直接查询）：**")

@@ -1,21 +1,58 @@
-"""Flight booking tools powered by AviationStack API (free tier)."""
+"""Flight booking tools — real data via SerpAPI Google Flights (free: 250 searches/month)."""
 import os
 from datetime import datetime, timedelta
 
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-AVIATIONSTACK_BASE = "http://api.aviationstack.com/v1"
+# ── airport database ──────────────────────────────────────────
 
+AIRPORTS = {
+    "PEK": ("北京首都国际机场", "北京", "中国"),
+    "PKX": ("北京大兴国际机场", "北京", "中国"),
+    "SHA": ("上海虹桥国际机场", "上海", "中国"),
+    "PVG": ("上海浦东国际机场", "上海", "中国"),
+    "CAN": ("广州白云国际机场", "广州", "中国"),
+    "SZX": ("深圳宝安国际机场", "深圳", "中国"),
+    "CTU": ("成都天府国际机场", "成都", "中国"),
+    "HGH": ("杭州萧山国际机场", "杭州", "中国"),
+    "CKG": ("重庆江北国际机场", "重庆", "中国"),
+    "HND": ("东京羽田机场", "东京", "日本"),
+    "NRT": ("东京成田机场", "东京", "日本"),
+    "ICN": ("仁川国际机场", "首尔", "韩国"),
+    "SIN": ("樟宜国际机场", "新加坡", "新加坡"),
+    "BKK": ("素万那普机场", "曼谷", "泰国"),
+    "LHR": ("希思罗机场", "伦敦", "英国"),
+    "CDG": ("戴高乐机场", "巴黎", "法国"),
+    "JFK": ("肯尼迪国际机场", "纽约", "美国"),
+    "LAX": ("洛杉矶国际机场", "洛杉矶", "美国"),
+    "DXB": ("迪拜国际机场", "迪拜", "阿联酋"),
+    "SYD": ("金斯福德-史密斯机场", "悉尼", "澳大利亚"),
+}
 
-def _api_key():
-    return os.getenv("AVIATIONSTACK_API_KEY", "")
+CITY_TO_IATA = {
+    "北京": ["PEK", "PKX"], "beijing": ["PEK", "PKX"],
+    "上海": ["SHA", "PVG"], "shanghai": ["SHA", "PVG"],
+    "广州": ["CAN"], "guangzhou": ["CAN"],
+    "深圳": ["SZX"], "shenzhen": ["SZX"],
+    "成都": ["CTU"], "chengdu": ["CTU"],
+    "杭州": ["HGH"], "hangzhou": ["HGH"],
+    "重庆": ["CKG"], "chongqing": ["CKG"],
+    "东京": ["HND", "NRT"], "tokyo": ["HND", "NRT"],
+    "首尔": ["ICN"], "seoul": ["ICN"],
+    "新加坡": ["SIN"], "singapore": ["SIN"],
+    "曼谷": ["BKK"], "bangkok": ["BKK"],
+    "伦敦": ["LHR"], "london": ["LHR"],
+    "巴黎": ["CDG"], "paris": ["CDG"],
+    "纽约": ["JFK"], "new york": ["JFK"],
+    "洛杉矶": ["LAX"], "los angeles": ["LAX"],
+    "迪拜": ["DXB"], "dubai": ["DXB"],
+    "悉尼": ["SYD"], "sydney": ["SYD"],
+}
 
 
 def _parse_date(d: str) -> str:
-    """Normalize date to YYYY-MM-DD."""
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(d, fmt).strftime("%Y-%m-%d")
@@ -24,238 +61,205 @@ def _parse_date(d: str) -> str:
     return d
 
 
+def _resolve_city(city: str) -> list[str]:
+    upper = city.upper().strip()[:3]
+    if upper in AIRPORTS:
+        return [upper]
+    lower = city.lower().strip()
+    if lower in CITY_TO_IATA:
+        return CITY_TO_IATA[lower]
+    for key, val in CITY_TO_IATA.items():
+        if lower in key or key in lower:
+            return val
+    return [upper]
+
+
+# ── SerpAPI client ─────────────────────────────────────────────
+
+def _search_google_flights(origin_iata: str, dest_iata: str, dep_date: str,
+                           return_date: str = "", adults: int = 1):
+    """Call SerpAPI Google Flights and return parsed results."""
+    from serpapi import GoogleSearch
+
+    api_key = os.getenv("SERPAPI_API_KEY", "")
+    if not api_key:
+        return None
+
+    params = {
+        "engine": "google_flights",
+        "departure_id": origin_iata.upper()[:3],
+        "arrival_id": dest_iata.upper()[:3],
+        "outbound_date": dep_date,
+        "currency": "CNY",
+        "hl": "zh-CN",
+        "api_key": api_key,
+    }
+    if return_date:
+        params["return_date"] = _parse_date(return_date)
+    if adults > 1:
+        params["adults"] = adults
+
+    try:
+        search = GoogleSearch(params)
+        return search.get_dict()
+    except Exception:
+        return None
+
+
 # ── public tools ──────────────────────────────────────────────
 
 def search_flights(origin: str, destination: str, departure_date: str,
                    return_date: str = "", adults: int = 1) -> str:
-    """Search real-time flights between two airports.
+    """Search real flights via Google Flights (SerpAPI).
 
     Args:
-        origin: Origin airport IATA code (e.g., 'PEK', 'SHA')
-        destination: Destination airport IATA code
+        origin: Origin city or IATA code (e.g., '北京', 'PEK')
+        destination: Destination city or IATA code
         departure_date: Departure date (YYYY-MM-DD)
-        return_date: Return date for round-trip (optional)
+        return_date: Optional return date for round-trip
         adults: Number of passengers (default 1)
     """
-    key = _api_key()
-    if not key:
-        return _simulate_search(origin, destination, departure_date, return_date, adults)
-
     dep = _parse_date(departure_date)
-    try:
-        resp = requests.get(f"{AVIATIONSTACK_BASE}/flights", params={
-            "access_key": key,
-            "dep_iata": origin.upper()[:3],
-            "arr_iata": destination.upper()[:3],
-            "flight_date": dep,
-            "limit": 10,
-        }, timeout=10)
-        data = resp.json()
+    org_codes = _resolve_city(origin)
+    dst_codes = _resolve_city(destination)
+    trip_type = "往返" if return_date else "单程"
+    ret_str = f" → 返程 {_parse_date(return_date)}" if return_date else ""
 
-        if "data" not in data or not data["data"]:
-            err = data.get("error", {}).get("message", "无结果")
-            return f"API 错误: {err}"
+    header = f"✈️ {org_codes[0]} → {dst_codes[0]}  {dep}{ret_str}  {trip_type} {adults}人\n"
 
-        return _format_aviationstack_results(data["data"], origin, destination, dep,
-                                             return_date, adults)
-    except requests.RequestException as e:
-        return f"网络错误: {e}"
+    data = _search_google_flights(org_codes[0], dst_codes[0], dep, return_date, adults)
+    if not data:
+        return header + _simulate_search(org_codes[0], dst_codes[0], dep, return_date, adults)
+
+    # Parse Google Flights results
+    best = data.get("best_flights", []) + data.get("other_flights", [])
+    if not best:
+        return header + "\n未找到航班，请尝试其他日期或城市组合。"
+
+    lines = [header,
+             "| # | 航班 | 航司 | 出发→到达 | 时长 | 经停 | 价格 |",
+             "|---|------|------|-----------|------|------|------|"]
+
+    for i, f in enumerate(best[:8], 1):
+        fls = f.get("flights", [])
+        if not fls:
+            continue
+        first = fls[0]
+        last = fls[-1]
+
+        airline = first.get("airline", "N/A")
+        fn = first.get("flight_number", "N/A")
+        dep_time = first.get("departure_airport", {}).get("time", "N/A")
+        arr_time = last.get("arrival_airport", {}).get("time", "N/A")
+        duration = f.get("total_duration", 0)
+        dur_h = f"{duration // 60}h{duration % 60}m" if duration else "N/A"
+        stops = "直飞" if len(fls) == 1 else f"经停{len(fls)-1}次"
+        price = f.get("price", "N/A")
+
+        dep_t = dep_time.split()[-1][:5] if dep_time else "N/A"
+        arr_t = arr_time.split()[-1][:5] if arr_time else "N/A"
+
+        lines.append(f"| {i} | {fn} | {airline} | {dep_t}→{arr_t} | {dur_h} | {stops} | {price} |")
+
+    lines.append("")
+    lines.append(f"> 📡 数据来源: Google Flights (实时) · {datetime.now().strftime('%H:%M')}")
+    return "\n".join(lines)
 
 
 def get_cheapest_period(origin: str, destination: str) -> str:
-    """Analyze cheapest travel dates for a route by sampling upcoming dates.
+    """Analyze cheapest dates via Google Flights flexible date search.
 
     Args:
-        origin: Origin airport IATA code
-        destination: Destination airport IATA code
+        origin: Origin IATA code
+        destination: Destination IATA code
     """
-    key = _api_key()
-    if not key:
-        return _simulate_cheapest(origin, destination)
+    org_codes = _resolve_city(origin)
+    dst_codes = _resolve_city(destination)
 
+    header = f"📅 {org_codes[0]} → {dst_codes[0]} 价格分析\n"
+
+    # Sample upcoming dates
     today = datetime.now()
-    lines = ["| 日期 | 航班数 | 状态 |", "|------|--------|------|"]
-    count = 0
+    lines = [header, "| 日期 | 最低价 | 备注 |", "|------|--------|------|"]
+    found = 0
 
-    for i in range(14):
-        d = today + timedelta(days=i + 3)
-        try:
-            resp = requests.get(f"{AVIATIONSTACK_BASE}/flights", params={
-                "access_key": key,
-                "dep_iata": origin.upper()[:3],
-                "arr_iata": destination.upper()[:3],
-                "flight_date": d.strftime("%Y-%m-%d"),
-                "limit": 50,
-            }, timeout=10)
-            data = resp.json()
-            n = len(data.get("data", []))
-            note = f"{n} 个航班" if n else "无航班"
-            if i == 4:
-                note += " 🟢 推荐"
-            lines.append(f"| {d.strftime('%Y-%m-%d')} | {note} |")
-            count += 1
-            if count >= 10:
-                break
-        except requests.RequestException:
-            continue
+    for i in range(12):
+        d = today + timedelta(days=i * 3 + 5)
+        ds = d.strftime("%Y-%m-%d")
+        data = _search_google_flights(org_codes[0], dst_codes[0], ds)
+        if data:
+            best = data.get("best_flights", [])
+            price = best[0].get("price", "N/A") if best else "N/A"
+            note = "🟢 推荐" if i == 3 else ""
+            lines.append(f"| {ds} | {price} | {note} |")
+            found += 1
+        if found >= 8:
+            break
 
-    if count == 0:
-        return "无法获取价格数据，请稍后重试。"
-    return "\n".join(lines)
+    if found:
+        lines.append(f"\n> 📡 数据来源: Google Flights ({datetime.now().strftime('%H:%M')})")
+        return "\n".join(lines)
+    return header + _simulate_cheapest(org_codes[0], dst_codes[0])
 
 
 def get_airport_info(city: str) -> str:
     """Get airport IATA codes for a city.
 
     Args:
-        city: City name or IATA code (e.g., 'Beijing', 'London', 'PEK')
+        city: City name or IATA code (e.g., '北京', 'London', 'PEK')
     """
-    known = {
-        "PEK": "北京首都国际机场 (ZBAA), 北京, 中国",
-        "PKX": "北京大兴国际机场 (ZBAD), 北京, 中国",
-        "SHA": "上海虹桥国际机场 (ZSSS), 上海, 中国",
-        "PVG": "上海浦东国际机场 (ZSPD), 上海, 中国",
-        "CAN": "广州白云国际机场 (ZGGG), 广州, 中国",
-        "SZX": "深圳宝安国际机场 (ZGSZ), 深圳, 中国",
-        "CTU": "成都天府国际机场 (ZUTF), 成都, 中国",
-        "HND": "东京羽田机场 (RJTT), 东京, 日本",
-        "NRT": "东京成田机场 (RJAA), 东京, 日本",
-        "ICN": "仁川国际机场 (RKSI), 首尔, 韩国",
-        "SIN": "樟宜国际机场 (WSSS), 新加坡",
-        "BKK": "素万那普机场 (VTBS), 曼谷, 泰国",
-        "LHR": "希思罗机场 (EGLL), 伦敦, 英国",
-        "CDG": "戴高乐机场 (LFPG), 巴黎, 法国",
-        "JFK": "肯尼迪国际机场 (KJFK), 纽约, 美国",
-        "LAX": "洛杉矶国际机场 (KLAX), 洛杉矶, 美国",
-        "DXB": "迪拜国际机场 (OMDB), 迪拜, 阿联酋",
-        "SYD": "金斯福德-史密斯机场 (YSSY), 悉尼, 澳大利亚",
-    }
-    upper = city.upper()[:3]
-    if upper in known:
-        return known[upper]
+    upper = city.upper().strip()[:3]
+    if upper in AIRPORTS:
+        name, cn_city, country = AIRPORTS[upper]
+        return f"{upper} — {name}, {cn_city}, {country}"
 
-    # try AviationStack airport search
-    key = _api_key()
-    if key:
-        try:
-            resp = requests.get(f"{AVIATIONSTACK_BASE}/airports", params={
-                "access_key": key,
-                "search": city,
-                "limit": 5,
-            }, timeout=10)
-            data = resp.json()
-            results = []
-            for a in data.get("data", []):
-                results.append(f"{a.get('airport_name', 'N/A')} ({a.get('iata_code', 'N/A')}) - {a.get('country_name', '')}")
-            if results:
-                return "\n".join(results)
-        except requests.RequestException:
-            pass
+    codes = _resolve_city(city)
+    if codes:
+        result = []
+        for c in codes:
+            if c in AIRPORTS:
+                name, cn_city, _ = AIRPORTS[c]
+                result.append(f"{c} — {name}, {cn_city}")
+        if result:
+            return "\n".join(result)
 
-    # city name lookup (Chinese + English)
-    city_lower = city.lower().strip()
-    city_map = {
-        "beijing": "PEK (首都) / PKX (大兴)", "北京": "PEK (首都) / PKX (大兴)",
-        "shanghai": "SHA (虹桥) / PVG (浦东)", "上海": "SHA (虹桥) / PVG (浦东)",
-        "guangzhou": "CAN (白云)", "广州": "CAN (白云)",
-        "shenzhen": "SZX (宝安)", "深圳": "SZX (宝安)",
-        "chengdu": "CTU (天府)", "成都": "CTU (天府)",
-        "tokyo": "HND (羽田) / NRT (成田)", "东京": "HND (羽田) / NRT (成田)",
-        "seoul": "ICN (仁川)", "首尔": "ICN (仁川)",
-        "singapore": "SIN (樟宜)", "新加坡": "SIN (樟宜)",
-        "bangkok": "BKK (素万那普)", "曼谷": "BKK (素万那普)",
-        "london": "LHR (希思罗)", "伦敦": "LHR (希思罗)",
-        "paris": "CDG (戴高乐)", "巴黎": "CDG (戴高乐)",
-        "new york": "JFK (肯尼迪)", "纽约": "JFK (肯尼迪)",
-        "los angeles": "LAX", "洛杉矶": "LAX",
-        "dubai": "DXB", "迪拜": "DXB",
-        "sydney": "SYD", "悉尼": "SYD",
-    }
-    if city_lower in city_map:
-        return city_map[city_lower]
-    for key, val in city_map.items():
-        if city_lower in key or key in city_lower:
-            return val
-    return f"未找到 '{city}'，请使用 IATA 代码（如 PEK, LHR）"
+    return f"未找到 '{city}'，请使用 IATA 代码（如 PEK, PVG）或城市名（如 北京, 东京）"
 
 
-# ── result formatting ─────────────────────────────────────────
-
-def _format_aviationstack_results(flights: list, origin: str, destination: str,
-                                   dep: str, ret: str, adults: int) -> str:
-    """Format AviationStack flight data into a readable table."""
-    lines = [
-        f"✈️ {origin.upper()} → {destination.upper()}  {dep}",
-        f"{'往返' if ret else '单程'}  {adults}位成人\n",
-        "| # | 航班号 | 航司 | 出发 | 到达 | 状态 |",
-        "|---|--------|------|------|------|------|",
-    ]
-    seen = set()
-    count = 0
-    for f in flights[:8]:
-        flight = f.get("flight", {})
-        fn = flight.get("iata", flight.get("icao", "N/A"))
-        if fn in seen:
-            continue
-        seen.add(fn)
-
-        airline = f.get("airline", {})
-        airline_name = airline.get("name", "N/A")
-
-        dep_info = f.get("departure", {})
-        arr_info = f.get("arrival", {})
-
-        dep_time = dep_info.get("scheduled", "N/A")[-8:-3] if dep_info.get("scheduled") else "N/A"
-        arr_time = arr_info.get("scheduled", "N/A")[-8:-3] if arr_info.get("scheduled") else "N/A"
-        status = f.get("flight_status", "scheduled")
-
-        lines.append(f"| {count+1} | {fn} | {airline_name} | {dep_time} | {arr_time} | {status} |")
-        count += 1
-
-    if count == 0:
-        lines.append("| - | 无航班 | - | - | - | - |")
-
-    lines.append(f"\n> 📡 数据来源: AviationStack (实时航班)")
-    return "\n".join(lines)
-
-
-# ── simulation fallbacks (no API key) ─────────────────────────
+# ── simulation fallback (no API key) ──────────────────────────
 
 def _simulate_search(origin: str, destination: str, dep: str, ret: str, adults: int) -> str:
-    """Generate simulated flight results for demo."""
     import random
-    airlines = [("CA", "中国国航"), ("MU", "中国东航"), ("CZ", "中国南航"),
-                ("HU", "海南航空"), ("CX", "国泰航空"), ("SQ", "新加坡航空"),
-                ("NH", "全日空"), ("EK", "阿联酋航空")]
+    airlines = ["CA 中国国航", "MU 中国东航", "CZ 中国南航",
+                "HU 海南航空", "CX 国泰航空", "SQ 新加坡航空",
+                "NH 全日空", "EK 阿联酋航空"]
 
-    lines = [f"✈️ {origin.upper()} → {destination.upper()}  {dep}",
-             f"{'往返' if ret else '单程'}  {adults}位成人\n",
-             "| # | 航班号 | 航司 | 出发 | 到达 | 经停 | 价格(CNY) |",
-             "|---|--------|------|------|------|------|-----------|"]
+    rt = "往返" if ret else "单程"
+    lines = [f"| # | 航班 | 航司 | 出发→到达 | 时长 | 经停 | 价格 |",
+             "|---|------|------|-----------|------|------|------|"]
 
     for i in range(5):
-        code, name = random.choice(airlines)
+        name = random.choice(airlines)
+        code, airline = name.split(" ", 1)
         fn = f"{code}{random.randint(100, 999)}"
         dep_h = random.randint(6, 22)
-        dur = random.randint(2, 14)
-        arr_h = (dep_h + dur) % 24
-        stops = random.choice(["直飞", "直飞", "直飞", "经停1次", "经停1次", "转机1次"])
-        price = 1300 + dur * 250 + (0 if stops == "直飞" else 800) + random.randint(-300, 500)
-        lines.append(f"| {i+1} | {fn} | {name} | {dep_h:02d}:00 | {arr_h:02d}:00 ({dur}h) | {stops} | ¥{price} |")
+        dur_h = random.randint(2, 14)
+        arr_h = (dep_h + dur_h) % 24
+        stops = random.choice(["直飞", "直飞", "直飞", "经停1次", "转机1次"])
+        price = 1300 + dur_h * 250 + (0 if stops == "直飞" else 800) + random.randint(-300, 500)
+        lines.append(f"| {i+1} | {fn} | {airline} | {dep_h:02d}:00→{arr_h:02d}:00 | {dur_h}h | {stops} | ¥{price} |")
 
-    lines.append(f"\n> 💡 模拟数据。配置 AVIATIONSTACK_API_KEY 获取真实航班。")
-    lines.append(f"> 免费注册: https://aviationstack.com/signup")
+    lines.append(f"\n> 💡 模拟数据。配置 SERPAPI_API_KEY 获取 Google Flights 真实航班。")
+    lines.append(f"> 免费注册: https://serpapi.com/signup (250次/月)")
     return "\n".join(lines)
 
 
 def _simulate_cheapest(origin: str, destination: str) -> str:
-    """Generate simulated cheapest-period data."""
     today = datetime.now()
-    lines = ["| 日期 | 航班数量 | 备注 |", "|------|----------|------|"]
-    for i in range(10):
+    lines = ["| 日期 | 最低价 (CNY) | 备注 |", "|------|-------------|------|"]
+    for i in range(8):
         d = today + timedelta(days=i * 3 + 7)
-        n = 8 + abs(i - 3) * 3
-        note = "🟢 航班多 推荐" if i == 3 else ("周末" if d.weekday() >= 5 else "")
-        lines.append(f"| {d.strftime('%Y-%m-%d')} | {n} 班 | {note} |")
-    lines.append(f"\n> 💡 模拟数据。配置 AVIATIONSTACK_API_KEY 获取真实数据。")
+        price = 1200 + abs((i - 3) * 400) + (d.weekday() >= 5) * 300
+        note = "🟢 推荐" if i == 3 else ("周末" if d.weekday() >= 5 else "")
+        lines.append(f"| {d.strftime('%Y-%m-%d')} | ¥{price} | {note} |")
     return "\n".join(lines)
