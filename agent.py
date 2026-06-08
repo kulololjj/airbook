@@ -64,11 +64,30 @@ def get_agent():
     return create_agent(llm, tools, system_prompt=_build_system_prompt())
 
 
-def chat(message: str) -> str:
-    """Send a message and get the response text."""
+MEMORY_SIZE = 10  # 保留最近 10 条消息（5 轮对话）
+
+def chat(message: str, history: list[dict] | None = None) -> str:
+    """Send a message and get the response text.
+
+    Args:
+        message: Current user message
+        history: List of {"role": "user"|"assistant", "content": "..."}
+    """
     agent = get_agent()
+    msg_list = []
+
+    # 注入最近历史，让 agent 记住上下文
+    if history:
+        for m in history[-MEMORY_SIZE:]:
+            if m["role"] == "user":
+                msg_list.append(HumanMessage(content=m["content"]))
+            elif m["role"] == "assistant":
+                msg_list.append(AIMessage(content=m["content"]))
+
+    msg_list.append(HumanMessage(content=message))
+
     result = agent.invoke(
-        {"messages": [HumanMessage(content=message)]},
+        {"messages": msg_list},
         config={"recursion_limit": 10},
     )
     for msg in reversed(result.get("messages", [])):

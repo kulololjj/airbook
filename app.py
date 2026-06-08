@@ -10,8 +10,8 @@ st.title("🛫 AI 机票助手")
 with st.sidebar:
     st.header("🛫 机票助手")
     ds = "🟢 DeepSeek" if os.getenv("DEEPSEEK_API_KEY") else "⚪ DeepSeek"
-    av = "🟢 AviationStack" if os.getenv("AVIATIONSTACK_API_KEY") else "⚪ AviationStack(模拟)"
-    st.caption(f"{ds}　{av}")
+    gf = "🟢 Google Flights" if os.getenv("SERPAPI_API_KEY") else "⚪ Google Flights(模拟)"
+    st.caption(f"{ds}　{gf}")
 
     st.markdown("---")
     st.markdown("**💡 快速示例（点击直接查询）：**")
@@ -50,7 +50,8 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     with st.chat_message("assistant"):
         with st.spinner("查询中..."):
             try:
-                response = chat(user_msg)
+                history = st.session_state.messages[:-1]  # 对话历史（不含当前消息）
+                response = chat(user_msg, history=history)
                 st.markdown(response)
                 st.session_state.messages.append({"role": "assistant", "content": response})
             except Exception as e:
